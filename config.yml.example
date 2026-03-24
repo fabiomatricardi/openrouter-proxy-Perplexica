@@ -28,9 +28,9 @@ vane:
   
   # List of free OpenRouter models to rotate through (user-configurable)
   free_models:
-    - "google/gemma-3-1b-it:free"
-    - "meta-llama/llama-3.2-1b-instruct:free"
-    - "qwen/qwen-2.5-7b-instruct:free"
+    - "nvidia/nemotron-3-nano-30b-a3b:free"
+    - "arcee-ai/trinity-mini:free"
+    - "google/gemma-3n-e4b-it:free"
   
   # Model selection strategy: round-robin | random
   model_selection: "round-robin"
