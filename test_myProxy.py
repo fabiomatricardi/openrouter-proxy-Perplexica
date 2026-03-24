@@ -14,7 +14,7 @@ data = {
     "messages": [
         {"role": "user", "content": "Hello!"}
     ],
-    "stream": False
+    "stream": False  # you can change to True to test the streaming effect
 }
 
 try:
