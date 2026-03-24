@@ -37,8 +37,8 @@ A lightweight proxy server for the OpenRouter API with **automatic API key rotat
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/openrouter-proxy.git
-cd openrouter-proxy
+git clone https://github.com/fabiomatricardi/openrouter-proxy-Perplexica.git
+cd openrouter-proxy-Perplexica
 
 # Create virtual environment
 python -m venv venv
