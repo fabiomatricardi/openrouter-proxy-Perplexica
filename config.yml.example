@@ -9,8 +9,8 @@ server:
 # OpenRouter API keys
 openrouter:
   keys:
-    - "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"
-    - "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"
+    - "sk-or-v1-xxxxxx"
+    - "sk-or-v1-xxxxxx"
   key_selection_strategy: "round-robin"
   key_selection_opts: []
   base_url: "https://openrouter.ai/api/v1"
