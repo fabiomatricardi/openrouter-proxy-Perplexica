@@ -2,10 +2,10 @@
 """
 API routes for OpenRouter API Proxy.
 """
-
+import asyncio
 import json
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Optional, Union
 
 import httpx
 from fastapi import APIRouter, Request, Header, HTTPException, FastAPI
@@ -15,9 +15,7 @@ from config import config, logger
 from constants import MODELS_ENDPOINTS
 from key_manager import KeyManager, mask_key
 from utils import verify_access_key, check_rate_limit
-# Add imports at the top
 from model_selector import ModelSelector
-from typing import Optional, Union
 
 # Create router
 router = APIRouter()
@@ -41,24 +39,33 @@ if config.get("vane", {}).get("free_models"):
 
 @asynccontextmanager
 async def lifespan(app_: FastAPI):
+    """Application lifespan manager for httpx client."""
     client_kwargs = {"timeout": 600.0}  # Increase default timeout
+    
     # Add proxy configuration if enabled
     if config["requestProxy"]["enabled"]:
         proxy_url = config["requestProxy"]["url"]
         client_kwargs["proxy"] = proxy_url
         logger.info("Using proxy for httpx client: %s", proxy_url)
+    
     app_.state.http_client = httpx.AsyncClient(**client_kwargs)
     yield
     await app_.state.http_client.aclose()
 
 
 async def get_async_client(request: Request) -> httpx.AsyncClient:
+    """Get the shared httpx async client from app state."""
     return request.app.state.http_client
 
 
 async def check_httpx_err(body: Union[str, bytes], api_key: Optional[str]):
-    """Check for API key errors in response body - handles empty input safely."""
+    """
+    Check for API key errors in response body - handles empty input safely.
     
+    Args:
+        body: Response body as string or bytes
+        api_key: API key for logging (masked)
+    """
     # 🔑 FIX: Skip validation if body is empty/whitespace
     if not body or (isinstance(body, str) and not body.strip()):
         return
@@ -76,7 +83,7 @@ async def check_httpx_err(body: Union[str, bytes], api_key: Optional[str]):
         if not isinstance(error, dict):
             return
         
-        # Existing error handling logic...
+        # Handle specific error types
         if error.get("code") == "insufficient_quota":
             logger.warning("API key has insufficient quota: %s", mask_key(api_key))
             await key_manager.disable_current_key(reason="insufficient_quota")
@@ -88,19 +95,19 @@ async def check_httpx_err(body: Union[str, bytes], api_key: Optional[str]):
             await key_manager.disable_current_key(reason="rate_limit")
             
     except json.JSONDecodeError:
-        # 🔑 FIX: Don't log as warning for empty/invalid JSON - it's expected in streaming
+        # 🔑 FIX: Don't log as warning for empty/invalid JSON - expected in streaming
         logger.debug("Could not parse response body as JSON (expected for streaming chunks)")
     except Exception as e:
         logger.debug("Error checking response for API errors: %s", str(e))
 
 
 def remove_paid_models(body: bytes) -> bytes:
-    # {'prompt': '0', 'completion': '0', 'request': '0', 'image': '0', 'web_search': '0', 'internal_reasoning': '0'}
+    """Filter out paid models from model list response when free_only is enabled."""
     prices = ['prompt', 'completion', 'request', 'image', 'web_search', 'internal_reasoning']
     try:
         data = json.loads(body)
     except (json.JSONDecodeError, ValueError) as e:
-        logger.warning("Error models deserialize: %s", str(e))
+        logger.warning("Error deserializing models: %s", str(e))
     else:
         if isinstance(data.get("data"), list):
             clear_data = []
@@ -114,11 +121,11 @@ def remove_paid_models(body: bytes) -> bytes:
 
 
 def prepare_forward_headers(request: Request) -> dict:
+    """Prepare headers to forward to OpenRouter, excluding hop-by-hop headers."""
     return {
         k: v
         for k, v in request.headers.items()
-        if k.lower()
-           not in ["host", "content-length", "connection", "authorization"]
+        if k.lower() not in ["host", "content-length", "connection", "authorization"]
     }
 
 
@@ -126,8 +133,15 @@ def prepare_forward_headers(request: Request) -> dict:
 async def proxy_endpoint(
     request: Request, path: str, authorization: Optional[str] = Header(None)
 ):
-    """Main proxy endpoint with Vane integration support."""
+    """
+    Main proxy endpoint with Vane integration support.
     
+    Proxies requests to OpenRouter API, handling:
+    - Standard authentication via access_key
+    - Vane special auth (model: "openrouter", Bearer: "openrouter")
+    - Streaming and non-streaming responses
+    - Model substitution for Vane requests
+    """
     # Check if this is a Vane request (special bypass authentication)
     is_vane_request = False
     vane_config = config.get("vane", {})
@@ -169,7 +183,6 @@ async def proxy_endpoint(
     request_body = None
     original_model = None
     
-    # In proxy_endpoint, when parsing the request body:
     if request.method == "POST":
         try:
             if body_bytes := await request.body():
@@ -187,11 +200,11 @@ async def proxy_endpoint(
                     logger.info("Original model: %s", original_model)
                     
                 # Vane-specific model substitution
-                if is_vane_request and vane_model_selector and original_model == vane_config.get("local_model_name"):
+                if (is_vane_request and vane_model_selector and 
+                    original_model == vane_config.get("local_model_name")):
                     selected_model = await vane_model_selector.get_next_model()
                     request_body["model"] = selected_model
                     # 🔑 Preserve the original stream parameter in the forwarded request
-                    # (it's already in request_body, so no extra action needed)
                     logger.info("Vane request: substituted model '%s' -> '%s', stream=%s", 
                                original_model, selected_model, is_stream)
         except Exception as e:
@@ -209,8 +222,20 @@ async def proxy_with_httpx(
     request_body: Optional[dict] = None,
     is_vane_request: bool = False,
 ) -> Response:
-    """Core logic to proxy requests - respects original stream parameter."""
+    """
+    Core logic to proxy requests - respects original stream parameter.
     
+    Args:
+        request: FastAPI request object
+        path: API path to proxy
+        api_key: OpenRouter API key to use
+        is_stream: Whether the original request asked for streaming
+        request_body: Parsed request body (for model substitution)
+        is_vane_request: Whether this is a Vane integration request
+        
+    Returns:
+        FastAPI Response (JSON or StreamingResponse)
+    """
     free_only = (any(f"/api/v1{path}" == ep for ep in MODELS_ENDPOINTS) and
                  config["openrouter"]["free_only"])
     
@@ -239,6 +264,13 @@ async def proxy_with_httpx(
     for attempt in range(max_retries):
         try:
             openrouter_req = client.build_request(**req_kwargs)
+            
+            # 🔑 NEW: Apply configurable delay before forwarding to OpenRouter
+            request_delay = config["openrouter"].get("request_delay", 0)
+            if request_delay > 0:
+                logger.debug("Applying %d second delay before forwarding to OpenRouter (attempt %d/%d)", 
+                            request_delay, attempt + 1, max_retries)
+                await asyncio.sleep(request_delay)
             
             # 🔑 KEY FIX: Only stream if the ORIGINAL request asked for it
             openrouter_resp = await client.send(openrouter_req, stream=is_stream)
@@ -275,7 +307,6 @@ async def proxy_with_httpx(
                 )
             
             # 🔑 Streaming request: preserve SSE passthrough
-            # Streaming response (SSE passthrough)
             async def sse_stream():
                 last_json = ""
                 try:
@@ -319,9 +350,10 @@ async def proxy_with_httpx(
                     error_msg = error_data.get("error", {}).get("message", "")
                     
                     # Check for model unavailable/unsupported errors
-                    if "model" in error_msg.lower() and ("not found" in error_msg.lower() or 
-                                                          "unavailable" in error_msg.lower() or
-                                                          "not supported" in error_msg.lower()):
+                    if ("model" in error_msg.lower() and 
+                        ("not found" in error_msg.lower() or 
+                         "unavailable" in error_msg.lower() or
+                         "not supported" in error_msg.lower())):
                         current_model = request_body.get("model") if request_body else None
                         if current_model:
                             tried_models.append(current_model)
@@ -343,7 +375,8 @@ async def proxy_with_httpx(
             if not is_stream and error_content:
                 await check_httpx_err(error_content, api_key)
             
-            logger.error("Request error: %s (stream=%s, status=%d)", str(e), is_stream, e.response.status_code)
+            logger.error("Request error: %s (stream=%s, status=%d)", 
+                        str(e), is_stream, e.response.status_code)
             
             # 🔑 FIX: Use safe error message for response
             error_detail = error_content.decode("utf-8", errors="replace") if error_content else str(e)
