@@ -8,9 +8,10 @@ server:
 
 # OpenRouter API keys
 openrouter:
+  request_delay: 15  # 🔑 NEW: Delay before forwarding (seconds)
   keys:
-    - "sk-or-v1-xxxxxx"
-    - "sk-or-v1-xxxxxx"
+    - "sk-or-v1-xxxxxx"  # API key from first account
+    - "sk-or-v1-xxxxxx"  # API key from second  account
   key_selection_strategy: "round-robin"
   key_selection_opts: []
   base_url: "https://openrouter.ai/api/v1"
@@ -26,11 +27,11 @@ vane:
   local_model_name: "openrouter"
   local_bearer_token: "openrouter"
   
-  # List of free OpenRouter models to rotate through (user-configurable)
+  # List of free OpenRouter models to rotate through (user-configurable) all models must end with ":free"
   free_models:
+    - "nvidia/nemotron-3-super-120b-a12b:free"
     - "nvidia/nemotron-3-nano-30b-a3b:free"
-    - "arcee-ai/trinity-mini:free"
-    - "google/gemma-3n-e4b-it:free"
+    - "z-ai/glm-4.5-air:free"
   
   # Model selection strategy: round-robin | random
   model_selection: "round-robin"
